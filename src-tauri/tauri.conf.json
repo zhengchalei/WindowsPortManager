@@ -15,7 +15,7 @@
         "title": "WindowsPortManager",
         "width": 1220,
         "height": 760,
-        "minWidth": 980,
+        "minWidth": 720,
         "minHeight": 620,
         "resizable": true
       }

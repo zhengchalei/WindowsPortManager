@@ -18,7 +18,7 @@ import {
   Trash2,
   Zap,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { killProcess, listPortUsage, refreshProcess, revealProcess } from "./api";
 import { useI18n, type TranslationKey } from "./i18n";
 import {
@@ -38,6 +38,25 @@ const filters: Array<{ id: PortFilter; labelKey: TranslationKey; icon: typeof Ac
   { id: "favorites", labelKey: "filter.favorites", icon: Star },
   { id: "recentlyKilled", labelKey: "filter.recentlyKilled", icon: Trash2 },
 ];
+
+type RefreshFrequency = "1000" | "5000" | "10000" | "off";
+
+const refreshFrequencyStorageKey = "windowsPortManager.refreshFrequency";
+
+const refreshOptions: Array<{ value: RefreshFrequency; labelKey: TranslationKey }> = [
+  { value: "1000", labelKey: "refresh.1s" },
+  { value: "5000", labelKey: "refresh.5s" },
+  { value: "10000", labelKey: "refresh.10s" },
+  { value: "off", labelKey: "refresh.off" },
+];
+
+function readInitialRefreshFrequency(): RefreshFrequency {
+  if (typeof localStorage === "undefined") return "1000";
+  const stored = localStorage.getItem(refreshFrequencyStorageKey);
+  return stored === "1000" || stored === "5000" || stored === "10000" || stored === "off"
+    ? stored
+    : "1000";
+}
 
 function normalizeError(error: unknown): AppError {
   if (typeof error === "object" && error !== null && "code" in error && "message" in error) {
@@ -69,6 +88,9 @@ export default function App() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [activeFilter, setActiveFilter] = useState<PortFilter>("all");
   const [protocolFilter, setProtocolFilter] = useState<ProtocolFilter>("ALL");
+  const [refreshFrequency, setRefreshFrequencyState] = useState<RefreshFrequency>(
+    readInitialRefreshFrequency,
+  );
   const [search, setSearch] = useState("");
   const [selectedQuickPort, setSelectedQuickPort] = useState<number | null>(null);
   const [occupiedOnly, setOccupiedOnly] = useState(true);
@@ -79,10 +101,13 @@ export default function App() {
   const [error, setError] = useState<AppError | null>(null);
   const [pendingKill, setPendingKill] = useState<PortUsage | null>(null);
   const [needsElevation, setNeedsElevation] = useState<PortUsage | null>(null);
+  const scanningRef = useRef(false);
 
   const loadPorts = useCallback(
-    async (keepSelection = true) => {
-      setLoading(true);
+    async (keepSelection = true, showSpinner = true) => {
+      if (scanningRef.current) return;
+      scanningRef.current = true;
+      if (showSpinner) setLoading(true);
       setError(null);
 
       try {
@@ -95,7 +120,8 @@ export default function App() {
       } catch (err) {
         setError(normalizeError(err));
       } finally {
-        setLoading(false);
+        if (showSpinner) setLoading(false);
+        scanningRef.current = false;
       }
     },
     [],
@@ -104,6 +130,16 @@ export default function App() {
   useEffect(() => {
     void loadPorts(false);
   }, [loadPorts]);
+
+  useEffect(() => {
+    if (refreshFrequency === "off") return;
+
+    const interval = window.setInterval(() => {
+      void loadPorts(true, false);
+    }, Number(refreshFrequency));
+
+    return () => window.clearInterval(interval);
+  }, [loadPorts, refreshFrequency]);
 
   const visibleRows = useMemo(
     () =>
@@ -155,6 +191,15 @@ export default function App() {
 
   function rowTitle(row: PortUsage): string {
     return getRowTitle(row, t("process.unknownProcess"), t("process.noPid"));
+  }
+
+  function setRefreshFrequency(nextFrequency: RefreshFrequency) {
+    setRefreshFrequencyState(nextFrequency);
+    localStorage.setItem(refreshFrequencyStorageKey, nextFrequency);
+  }
+
+  function refreshLabel(frequency: RefreshFrequency): string {
+    return t(refreshOptions.find((option) => option.value === frequency)?.labelKey ?? "refresh.1s");
   }
 
   function toggleFavorite(row: PortUsage) {
@@ -330,6 +375,18 @@ export default function App() {
               <option value="zh-CN">{t("language.chinese")}</option>
             </select>
 
+            <select
+              aria-label={t("refresh.aria")}
+              value={refreshFrequency}
+              onChange={(event) => setRefreshFrequency(event.target.value as RefreshFrequency)}
+            >
+              {refreshOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {t(option.labelKey)}
+                </option>
+              ))}
+            </select>
+
             <label className="toggle">
               <input
                 type="checkbox"
@@ -359,9 +416,11 @@ export default function App() {
                 <h1>{t("table.title")}</h1>
                 <p>{t("table.summary", { visible: visibleRows.length, total: rows.length })}</p>
               </div>
-              <div className="live-pill">
+              <div className={`live-pill ${refreshFrequency === "off" ? "paused" : ""}`}>
                 <span />
-                {t("table.live")}
+                {refreshFrequency === "off"
+                  ? t("table.paused")
+                  : t("table.live", { interval: refreshLabel(refreshFrequency) })}
               </div>
             </div>
 
